@@ -14,13 +14,13 @@
 
     const Graph = ForceGraph3D()
       (document.getElementById('3d-graph'))
-	.jsonUrl('test.json')
+	.jsonUrl('output.json')
         .backgroundColor('#000000')
         .nodeLabel('id')
         .enableNodeDrag(false)
         .enableNavigationControls(false)
         .showNavInfo(false)
-        .nodeAutoColorBy('type')
+        .nodeAutoColorBy('role')
 	.linkDirectionalParticleWidth(1)
 	.linkDirectionalParticles(5)
 	.zoomToFit(true);

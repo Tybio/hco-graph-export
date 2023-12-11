@@ -1,64 +1,105 @@
-import networkx as nx
-import matplotlib.pyplot as plt
 import json
-import requests
 import argparse
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+import networkx as nx
+import requests
+######################
+#   Config Crap      #
+######################
+### Server Address ###
+HCO_SERVER = '192.168.1.103'
+### URL ###
+target = f"https://{HCO_SERVER}/api/v2/shql/"
 
 ### Commandline Stuff ###
 
 argParser = argparse.ArgumentParser()
-argParser.add_argument("-1", "--layer1", action='store_true',  help="Add Layer1 information to output")
-argParser.add_argument("-3", "--layer3", action='store_true', help="Add Layer3 information to output")
-argParser.add_argument("-o", "--outfile", help="Output file name", required=True, default="stdout")
+argParser.add_argument(
+    "-1", "--layer1", 
+    action='store_false',
+    help="Add Layer1 information to output"
+    )
+
+argParser.add_argument(
+    "-3", "--layer3", 
+    action='store_false',
+    help="Add Layer3 information to output"
+    )
+
+argParser.add_argument(
+    "-o", "--outfile", 
+    help="Output file name",
+    default="output.json"
+    )
 
 args = argParser.parse_args()
 outfile = args.outfile
-### Server Address ###
-hco_server = '192.168.56.11'
-### API Root ###
-shql_api = f"https://{hco_server}/api/v2/shql/"
-
-### Build query for  topology information from HCO via SHQL ###
-if args.layer3: qLOGTopo = 'link[.layer = "R_LOGICAL"] | view ("portA-Name": .portA.device.name, "portA-ID": .id, "portB-Name": .portB.device.name, "portB-ID": .id)'
-if args.layer1: qOPTTopo = 'link[.layer = "OMS"] | view ( "oportA-Name": .portA.device.name, "oportA-type": .portA.device.vendor, "oportB-Name": .portB.device.name, "oportB-type": .portB.device.vendor)'
-session = requests.Session()
-
-### Run query ###
-if args.layer3: rLOGTopo = session.post(shql_api, data=qLOGTopo, verify=False, auth=('admin', 'admin'), headers={'Content-Type': 'text/plain'})
-if args.layer1: rOPTTopo = session.post(shql_api, data=qOPTTopo, verify=False, auth=('admin', 'admin'), headers={'Content-Type': 'text/plain'})
-
-### Transform response to json ###
-if args.layer3: dLOGTopo = rLOGTopo.json()
-if args.layer1: dOPTTopo = rOPTTopo.json()
 
 ### Start networkx graph instance ###
 N=nx.Graph()
 
-### Iterate over the L3 topology returned and insert it into the graph ###
+
+
+### Funtion to deal with http crud ###
+
+def post_query(data=None):
+    session = requests.Session()
+    response = session.post(target,
+                            data=data,
+                            verify=False,
+                            auth=('admin', 'admin'),
+                            headers={'Content-Type': 'text/plain'}
+                            )
+    output = response.json()
+    return output
+
+def check_node(d, v, l):
+    nrole = 'Core'
+    if not d in N and l == 'Layer3':
+        if 'ER' in d:
+            nrole = 'Edge'
+        N.add_node(d, role=nrole, vendor=v)
+    if not d in N and l == 'Layer1':
+        N.add_node(d, role='ROADM', vendor=v)
+    return True
+
 if args.layer3:
-  for link in dLOGTopo:
-    firstNode = link["portA-Name"]
-    secondNode = link["portB-Name"]
-    
-    if not firstNode in N: N.add_node(firstNode, type=firstNode[:2])
-    if not secondNode in N: N.add_node(secondNode, type=secondNode[:2])
-    
-    N.add_edge(link["portA-Name"], link["portB-Name"])
+    D_L3TOPO = post_query(data='link[.layer = "R_PHYSICAL"] |'
+                          'view ("A-Name": .portA.device.name,'
+                          '"A-Vendor": .portA.device.vendor,'
+                          '"B-Name": .portB.device.name,'
+                          '"B-Vendor": .portB.device.vendor,'
+                          '"role": .role)'
+                         )
+    for link in D_L3TOPO:
+        check_node(link["A-Name"], link["A-Vendor"], 'Layer3')
+        check_node(link["B-Name"], link["B-Vendor"], 'Layer3')
+        N.add_edge(link["A-Name"], link["B-Name"], role=link["role"])
 
-
-### Iterate over the L1 topology returned and insert it into the graph ###
 if args.layer1:
-  for link in dOPTTopo:
-    firstROADM = link["oportA-Name"]
-    secondROADM = link["oportB-Name"]
-    
-    if not firstROADM in N: N.add_node(firstROADM, type=link["oportA-type"])
-    if not secondROADM in N: N.add_node(secondROADM, type=link["oportB-type"])
-    
-    if not N.has_edge(firstROADM, secondROADM): N.add_edge(link["oportA-Name"], link["oportB-Name"])
+    D_OTOPO = post_query(data='link[.layer = "OMS"] |'
+                         'view ( "A-Name": .portA.device.name,'
+                         '"A-Vendor": .portA.device.vendor,'
+                         '"B-Name": .portB.device.name,'
+                         '"B-Vendor": .portB.device.vendor)'
+                         )
+    for link in D_OTOPO:
+        check_node(link["A-Name"], link["A-Vendor"], 'Layer1')
+        check_node(link["B-Name"], link["B-Vendor"], 'Layer1')
+        N.add_edge(link["A-Name"], link["B-Name"], role='L1_Link')
 
+
+
+if args.layer1 and args.layer3:
+    D_CLINK = post_query(data='link[.layer = "ETH" and .role = "CROSS_LINK"] |'
+                         'view ( "NodeA": .portA.device.name,'
+                         '"NodeB": .portB.device.name)'
+                         )
+    for link in D_CLINK:
+        if link["NodeA"] in N and link["NodeB"] in N:
+            N.add_edge(link["NodeA"], link["NodeB"], role='Cross_link')
+
+print(f"Nodes: {N.number_of_nodes()}")
+print(f"Edges: {N.number_of_edges()}")
 ### Write out a json topology ###
-with open(outfile, 'w') as f:
-    json.dump(nx.node_link_data(N), f)
+with open(outfile, "w", encoding="utf-8") as f:
+    json.dump(nx.node_link_data(N), f, indent=4)
