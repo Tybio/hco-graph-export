@@ -1,7 +1,11 @@
+"""Script to query HCO instance and build networkx graph topology, then export to json file."""
+
 import json
 import argparse
 import networkx as nx
 import requests
+import hcoapi
+
 ######################
 #   Config Crap      #
 ######################
@@ -42,6 +46,7 @@ N=nx.Graph()
 ### Funtion to deal with http crud ###
 
 def post_query(data=None):
+    """Function to query HCO server with 'data'"""
     session = requests.Session()
     response = session.post(target,
                             data=data,
@@ -53,6 +58,8 @@ def post_query(data=None):
     return output
 
 def check_node(d, v, l):
+    """Checks L3 nodes for role (Core/Edge) as defined in the demo topology for HCO
+        then adds them to the graph"""
     nrole = 'Core'
     if not d in N and l == 'Layer3':
         if 'ER' in d:
@@ -63,25 +70,14 @@ def check_node(d, v, l):
     return True
 
 if args.layer3:
-    D_L3TOPO = post_query(data='link[.layer = "R_PHYSICAL"] |'
-                          'view ("A-Name": .portA.device.name,'
-                          '"A-Vendor": .portA.device.vendor,'
-                          '"B-Name": .portB.device.name,'
-                          '"B-Vendor": .portB.device.vendor,'
-                          '"role": .role)'
-                         )
+    D_L3TOPO = post_query(data= hcoapi.r_physical_graph())
     for link in D_L3TOPO:
         check_node(link["A-Name"], link["A-Vendor"], 'Layer3')
         check_node(link["B-Name"], link["B-Vendor"], 'Layer3')
         N.add_edge(link["A-Name"], link["B-Name"], role=link["role"])
 
 if args.layer1:
-    D_OTOPO = post_query(data='link[.layer = "OMS"] |'
-                         'view ( "A-Name": .portA.device.name,'
-                         '"A-Vendor": .portA.device.vendor,'
-                         '"B-Name": .portB.device.name,'
-                         '"B-Vendor": .portB.device.vendor)'
-                         )
+    D_OTOPO = post_query(data=hcoapi.oms_graph())
     for link in D_OTOPO:
         check_node(link["A-Name"], link["A-Vendor"], 'Layer1')
         check_node(link["B-Name"], link["B-Vendor"], 'Layer1')
@@ -90,10 +86,7 @@ if args.layer1:
 
 
 if args.layer1 and args.layer3:
-    D_CLINK = post_query(data='link[.layer = "ETH" and .role = "CROSS_LINK"] |'
-                         'view ( "NodeA": .portA.device.name,'
-                         '"NodeB": .portB.device.name)'
-                         )
+    D_CLINK = post_query(data=hcoapi.eth_graph())
     for link in D_CLINK:
         if link["NodeA"] in N and link["NodeB"] in N:
             N.add_edge(link["NodeA"], link["NodeB"], role='Cross_link')
